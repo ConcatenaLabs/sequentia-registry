@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/ConcatenaLabs/sequentia-contracts",
+  "commit": "11a719c590435dbb684e9205bb3db9a6db13098c",
+  "reader": { "path": "mirrors/js/sequentia-address.mjs", "sha256": "74fca7b895f701c41628bebddb82777635b5b4093e23d64c4e8e5dfae1361981" },
+  "compiler": { "name": "simplicityhl", "version": "0.7.2" },
+  "budget": { "per_witness_byte": 4, "offset": 50, "max": 4000050 }
+}

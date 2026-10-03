@@ -8,7 +8,15 @@ Every Sequentia surface (the node, the node GUI, the block explorer, the web
 wallet) fetches asset labels from here, so there is a single source of truth
 instead of hand-maintained lists.
 
-The whole service is one file, `server.js`, with zero npm dependencies:
+Beside the assets it keeps two more collections: **contract templates**
+(Simplicity and tapscript contracts, each verified on write against its
+descriptor, sources, golden vectors and pinned compiler, with the instances the
+chain has paid) and **oracle keys** (the price feeds a BIP340 key signs and where
+its attestations are published). See "Contract templates" and "Oracle keys"
+below.
+
+The service is `server.js` with the collections in `contracts.js`, and has zero
+npm dependencies:
 
 ```
 node server.js
@@ -219,7 +227,8 @@ legacy entry. An entry that has been handed to a successor additionally
 carries `origin_contract` (the contract as issued) and `successions[]` (see
 "Succession").
 
-Request bodies are capped at 256 KB. POST failure statuses: 400 (validation,
+Request bodies are capped at 256 KB (1 MB for the contract and oracle routes);
+a larger one is answered with 413. POST failure statuses: 400 (validation,
 chain mismatch, domain-proof failure), 403 (bad/missing admin token, or a
 succession signature that does not verify), 404 (succession of an unknown
 asset), 409 (ticker already claimed or reserved).
@@ -295,6 +304,123 @@ message, signature }` is appended to `successions[]`.
 the signature (the key as 64-hex or WIF; on a shared machine pass it via
 `SUCCESSION_PRIVKEY` in the environment instead of the command line).
 
+## Contract templates
+
+A contract template is a [contract descriptor](https://github.com/ConcatenaLabs/sequentia-contracts/blob/main/docs/descriptor.md)
+(version 1 or 2), identified by its template hash. The registry keeps, for each,
+the descriptor exactly as submitted, every Simplicity program's source as
+compiled, the golden vectors, the pinned compiler, the commitment root of each
+Simplicity leaf, and the publisher's audit notes. Everything it serves can be
+checked again from what it serves.
+
+A template is stored only when all of these hold:
+
+1. **The descriptor reads.** `contracts/sequentia-address.mjs`, the JavaScript
+   reader of `sequentia-contracts`, pinned in `contracts/PIN.json`, refuses every
+   file the specification refuses: each case of the reader corpus
+   (`mirrors/fixtures/refusals.json`) is refused by this registry, for its
+   reason, in its tests. The descriptor is submitted as the file's text, because
+   parsing it into the request would already drop a repeated field or round a
+   number the reader must see.
+2. **The sources are the ones compiled.** Each Simplicity leaf names the pinned
+   compiler (`simplicityhl`, the version in `PIN.json`), and its source, with its
+   helper includes resolved as `seqc expand` prints it, hashes to the leaf's
+   `source_sha256`.
+3. **The vectors are reproduced.** The reader derives every golden vector's
+   leaves, root, tweak, output key, parity, script and addresses, field for field.
+4. **The compiler agrees.** `seqc descriptor check`, the pinned compiler of
+   `sequentia-contracts`, compiles each source to the leaf's commitment root,
+   witness list and cost bound, and runs the lints. With `REQUIRE_COMPILE=0`
+   (testing only) this is skipped and the entry is stored unverified.
+5. **The publisher is who it says.** The publisher's domain serves, at
+   `https://<domain>/.well-known/sequentia-contract-proof-<template_hash>`, exactly
+   the line
+
+   ```
+   Authorize linking the domain name <domain> to the Sequentia contract template <template_hash>
+   ```
+
+   The operator publishes with `ADMIN_TOKEN` instead, and is the only publisher in
+   the `sequentia/` namespace. Any other namespace belongs to the first domain to
+   publish in it, and a name and version name one template only.
+
+Audit notes are the publisher's: each is who audited, a link to the report, an
+optional SHA-256 of it, and a summary, shown as the publisher states them.
+
+```
+curl -X POST https://sequentiatestnet.com/registry/contracts \
+  -H 'Content-Type: application/json' \
+  -d '{"descriptor": "<descriptor.json, as text>",
+       "sources": {"<name>.simf": "<seqc expand <name>.simf>"},
+       "vectors": "<vectors.json, as text>",
+       "publisher": {"domain": "example.com", "name": "Example"},
+       "audits": [{"by": "An auditor", "url": "https://example.com/audit.pdf", "summary": "..."}]}'
+```
+
+An **instance** is a template's parameters on this chain. Anyone may register
+one, because it is checked completely: the reader derives its script, its
+genesis hash must be this chain's (read from electrs), the template must list
+the chain named by `CONTRACTS_CHAIN`, and electrs must show an output paying the
+script. `POST /contracts/<template_hash>/instances` takes `{ params, slots,
+genesis }`, the instance file a contract's tool writes.
+
+The explorer reads `GET /contracts/index.minimal.json`:
+
+```json
+{
+  "leaves":  { "<commitment root>": [["<template_hash>", "sequentia/faucet-drip", 1, "drip", "drip"]] },
+  "scripts": { "<scriptPubKey>":    ["<template_hash>", "sequentia/faucet-drip", 1] }
+}
+```
+
+`leaves` maps the commitment root of each verified template's Simplicity leaves
+to the template, the leaf and the path that spends it. A template keeps its
+parameters in a data leaf, so a root is one constant per template and a spend
+reveals it. One root can sit in several templates, so each maps to a list.
+`scripts` maps each registered instance's output script to its template.
+
+## Oracle keys
+
+An oracle key record says which price feeds a BIP340 key signs, who runs the
+signer, and where every attestation is published:
+
+```json
+{
+  "version": 1,
+  "key": "<32-byte x-only key>",
+  "feeds": [{ "id": "BTC/USD", "description": "Bitcoin in US dollars", "decimals": 8 }],
+  "operator": { "name": "Example oracle", "domain": "oracle.example.com" },
+  "endpoints": ["https://oracle.example.com/attestations"],
+  "attestation_tag": "<the tag of the tagged hash the signer signs>",
+  "bond": "<optional: the bond that two conflicting attestations forfeit>",
+  "revoked": false
+}
+```
+
+`POST /oracles` takes `{ record, signature }`. The signature is the key's, BIP340,
+over the tagged hash (tag `sequentia-registry/oracle-key/v1`) of the record's
+canonical JSON, so no one can file a record for a key they do not hold, nor
+change a record after its key signed it. The operator's domain serves, at
+`https://<domain>/.well-known/sequentia-oracle-proof-<key>`, exactly
+`Authorize linking the domain name <domain> to the Sequentia oracle key <key>`.
+A key's record is replaced by a newer one it signs, from the same domain; a
+record with `revoked: true` stays listed as revoked. The registry operator files
+records with `ADMIN_TOKEN` and no domain proof, never without the key's signature.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/contracts` | Every template, without its descriptor, sources and vectors |
+| GET | `/contracts/<template_hash>` | One template, with the descriptor, sources and vectors as submitted |
+| GET | `/contracts/index.minimal.json` | Verified templates' Simplicity roots, and registered instances' scripts |
+| GET | `/contracts/<template_hash>/instances` | A template's registered instances |
+| GET | `/contracts/instances/<scriptPubKey>` | One instance |
+| POST | `/contracts` | Publish a template: every check above, with the domain proof |
+| POST | `/admin/contracts` | (bearer `ADMIN_TOKEN`) the same checks, published by the operator |
+| POST | `/contracts/<template_hash>/instances` | Register an instance the chain has paid |
+| GET | `/oracles`, `/oracles/<key>` | Oracle key records |
+| POST | `/oracles` | File a record: the key's signature and the domain proof |
+| POST | `/admin/oracles` | (bearer `ADMIN_TOKEN`) the key's signature, filed by the operator |
+
 ## Consumers
 
 - **Sequentia node**: start `sequentiad` with `-assetregistryurl=<index url>`;
@@ -307,7 +433,9 @@ the signature (the key as 64-hex or WIF; on a shared machine pass it via
   [Sequentia](https://github.com/ConcatenaLabs/Sequentia) repo.
 - **Block explorer**: the explorer's public server proxies `/registry` to this
   service, and the `sequentia-testnet` flavor defaults its asset map
-  (`ASSET_MAP_URL`) to `/registry/index.minimal.json`.
+  (`ASSET_MAP_URL`) to `/registry/index.minimal.json` and its contract map
+  (`CONTRACT_MAP_URL`) to `/registry/contracts/index.minimal.json`, which names
+  the template a Simplicity spend runs.
 - **Web wallet**: fetches `/registry/index.minimal.json` (override with
   `window.SEQ_REGISTRY_URL`).
 - **OpenAMP wallets**: discover restricted assets here, then verify the
@@ -383,12 +511,28 @@ chain check still runs). To bypass both checks for a hand-approved entry, set
 | `SEQ_ELECTRS_URL` | `http://127.0.0.1:3003` | esplora-API base for on-chain lookups |
 | `REQUIRE_DOMAIN_PROOF` | `1` | require the `.well-known` proof (`0` to skip, testing only) |
 | `PROOF_FETCH_TIMEOUT` | `8000` | ms timeout for the domain-proof fetch |
-| `ADMIN_TOKEN` | (unset) | enables `POST /admin/seed` |
+| `ADMIN_TOKEN` | (unset) | enables `POST /admin/seed`, `/admin/contracts` and `/admin/oracles` |
+| `SEQC` | `seqc` | the pinned compiler's `seqc` binary, from `sequentia-contracts` at the commit in `contracts/PIN.json` |
+| `REQUIRE_COMPILE` | `1` | compile every template with `SEQC` before storing it (`0` stores it unverified, testing only) |
+| `CONTRACTS_CHAIN` | `sequentia-testnet` | the chain name, in a descriptor's `chains`, that instances are registered on |
+
+`seqc` is built from `sequentia-contracts`, at the commit `contracts/PIN.json`
+names:
+
+```
+git clone https://github.com/ConcatenaLabs/sequentia-contracts && cd sequentia-contracts
+git checkout <commit from contracts/PIN.json>
+cargo build --release --locked --bin seqc -p sequentia-contracts   # target/release/seqc
+```
 
 ### Storage format
 
 The store is a flat directory of JSON files, one per asset:
 `<DB_DIR>/<asset_id>.json`, each containing the full entry shown under "API".
+Templates, instances and oracle keys sit beside them in
+`<DB_DIR>/contracts/<template_hash>.json`,
+`<DB_DIR>/contract-instances/<scriptPubKey>.json` and
+`<DB_DIR>/oracles/<key>.json`.
 There is no database server; back up or migrate the registry by copying the
 directory.
 
@@ -399,6 +543,14 @@ Repo layout:
 - `server.js`: the entire service (HTTP API, canonical-JSON hashing, asset-id
   derivation, electrs lookups, domain-proof fetch with SSRF guard, flat-file
   store, seeding, succession).
+- `contracts.js`: the contract templates, their instances and oracle keys, with
+  BIP340 verification.
+- `contracts/`: the pinned JavaScript reader of `sequentia-contracts`
+  (`sequentia-address.mjs`, copied unchanged) and `PIN.json`, which names its
+  commit and hash, the pinned compiler and Sequentia's budget. To move the pin,
+  copy the reader from the new commit and update `PIN.json` and the fixtures.
+- `test/contracts.test.js`, with `test/fixtures/sequentia-contracts/`: the
+  reader corpus and the templates it reads, copied from that commit.
 - `seed/legacy-assets.json`: pre-approved entries loaded on first run.
 - `tools/sign-succession.js`: signs a succession with the current issuer key.
 - `tools/succession-smoke.js`: self-contained end-to-end test of succession
@@ -406,6 +558,14 @@ Repo layout:
   exercises the hand-off and its refusals).
 - `db/`: the live registry state, ignored by version control; never force-add it.
 
-The only automated test is `node tools/succession-smoke.js`; verify other
-changes with the smoke commands above (and, for verification-path changes,
-against a local electrs). Open PRs against the `main` branch.
+The tests:
+
+```
+node --test test/*.test.js                              # contracts and oracle keys
+SEQC=/path/to/seqc node --test test/*.test.js           # and the pinned compiler's check
+node tools/succession-smoke.js                          # succession
+```
+
+Without `SEQC` the compiler's tests are skipped. Verify asset changes with the
+smoke commands above (and, for verification-path changes, against a local
+electrs). Open PRs against the `main` branch.
