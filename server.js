@@ -31,7 +31,13 @@
  *   SEQ_ELECTRS_URL      explorer API base for on-chain lookups (default http://127.0.0.1:3003)
  *   REQUIRE_DOMAIN_PROOF "1" (default) to require the .well-known proof; "0" to skip (testing)
  *   PROOF_FETCH_TIMEOUT  ms for the domain-proof fetch (default 8000)
- *   ADMIN_TOKEN          if set, enables POST /admin/seed (bearer) to add legacy entries
+ *   ADMIN_TOKEN          if set, enables POST /admin/seed (bearer) to add legacy entries,
+ *                        and /admin/contracts and /admin/oracles for the operator's own
+ *   SEQC                 the pinned compiler's seqc binary (default: seqc on the PATH)
+ *   REQUIRE_COMPILE      "1" (default) to compile every contract template; "0" stores it unverified
+ *   CONTRACTS_CHAIN      the descriptor chain name instances are registered on (default sequentia-testnet)
+ *
+ * Contract templates, their instances and oracle keys: contracts.js.
  */
 
 const http = require('http');
@@ -425,7 +431,12 @@ function proofText(domain, assetId) {
   return `Authorize linking the domain name ${domain} to the Sequentia asset ${assetId}`;
 }
 async function verifyDomainProof(domain, assetId) {
-  const url = `https://${domain}/.well-known/sequentia-asset-proof-${assetId}`;
+  return verifyProofLine(domain, `sequentia-asset-proof-${assetId}`, proofText(domain, assetId));
+}
+// The same proof for any record: https://<domain>/.well-known/<name> must be
+// exactly `line`. Contract templates and oracle keys use it too.
+async function verifyProofLine(domain, name, line) {
+  const url = `https://${domain}/.well-known/${name}`;
   let r;
   try { r = await fetchUrl(url); } catch (e) { throw httpErr(400, `domain proof fetch failed: ${e.message}`); }
   if (r.status !== 200) throw httpErr(400, `domain proof not found at ${url} (HTTP ${r.status})`);
@@ -441,7 +452,7 @@ async function verifyDomainProof(domain, assetId) {
     throw httpErr(400, `domain proof at ${url} must be plain text, not '${r.contentType}'`);
   // Require the body to EQUAL the authorization line (trimmed), not merely contain
   // it (MED-2): a substring match let unrelated/attacker-influenced content pass.
-  if (r.body.trim() !== proofText(domain, assetId)) throw httpErr(400, `domain proof at ${url} must contain exactly the authorization line and nothing else`);
+  if (r.body.trim() !== line) throw httpErr(400, `domain proof at ${url} must contain exactly the authorization line and nothing else`);
   return url;
 }
 
@@ -767,18 +778,37 @@ function send(res, status, obj, type = 'application/json') {
   });
   res.end(body);
 }
-function readBody(req) {
+// A body over the limit is answered with 413; the rest of it is read and dropped.
+function readBody(req, limit = 256 * 1024) {
   return new Promise((resolve, reject) => {
-    let d = ''; req.on('data', c => { d += c; if (d.length > 256 * 1024) req.destroy(); });
-    req.on('end', () => resolve(d)); req.on('error', reject);
+    let d = '', over = false;
+    req.on('data', c => {
+      if (over) return;
+      d += c;
+      if (d.length > limit) { over = true; d = ''; reject(httpErr(413, `the body is larger than ${limit} bytes`)); }
+    });
+    req.on('end', () => { if (!over) resolve(d); }); req.on('error', reject);
   });
 }
+
+// The contracts collection and oracle key records (contracts.js).
+const contracts = require('./contracts').init({
+  DB_DIR, ELECTRS, REQUIRE_DOMAIN_PROOF, DOMAIN_RE, fetchUrl, verifyProofLine, httpErr, canonicalize,
+});
+const isAdmin = req => !!ADMIN_TOKEN && req.headers.authorization === `Bearer ${ADMIN_TOKEN}`;
 
 const server = http.createServer(async (req, res) => {
   try {
     const u = new URL(req.url, `http://localhost:${PORT}`);
     const p = u.pathname.replace(/\/+$/, '') || '/';
     if (req.method === 'OPTIONS') return send(res, 204, '');
+
+    if (await contracts.route(req, p, (status, obj) => send(res, status, obj),
+      async () => {
+        // A template is a descriptor, its sources and its vectors: allow more.
+        const text = await readBody(req, 1024 * 1024);
+        try { return JSON.parse(text || '{}'); } catch (e) { throw httpErr(400, 'the body is not JSON'); }
+      }, () => isAdmin(req))) return;
 
     if (req.method === 'GET' && p === '/') return send(res, 200, allEntries());
     if (req.method === 'GET' && p === '/index.json') return send(res, 200, fullIndex());
@@ -813,7 +843,7 @@ const server = http.createServer(async (req, res) => {
 
     // POST /admin/seed  (bearer ADMIN_TOKEN) { asset_id, contract, skipDomain? } -> legacy/no-chain entry
     if (req.method === 'POST' && p === '/admin/seed') {
-      if (!ADMIN_TOKEN || req.headers.authorization !== `Bearer ${ADMIN_TOKEN}`) return send(res, 403, { error: 'forbidden' });
+      if (!isAdmin(req)) return send(res, 403, { error: 'forbidden' });
       const body = JSON.parse((await readBody(req)) || '{}');
       const entry = await register(body.asset_id, body.contract, { legacy: true, skipDomain: true });
       return send(res, 200, entry);
@@ -826,4 +856,4 @@ const server = http.createServer(async (req, res) => {
 });
 
 loadSeed();
-server.listen(PORT, () => console.log(`[registry] Sequentia Asset Registry on :${PORT} (electrs ${ELECTRS}, db ${DB_DIR}, domain-proof=${REQUIRE_DOMAIN_PROOF})`));
+contracts.readerReady.then(() => server.listen(PORT, () => console.log(`[registry] Sequentia Asset Registry on :${PORT} (electrs ${ELECTRS}, db ${DB_DIR}, domain-proof=${REQUIRE_DOMAIN_PROOF})`)));

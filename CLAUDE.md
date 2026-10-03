@@ -4,8 +4,10 @@ The Sequentia Asset Registry: the network's analogue of the Liquid Asset Registr
 asset id to issuer-published metadata and, where possible, proves that metadata is the same
 metadata the asset was issued under.
 
-The whole service is one file, `server.js`, on raw `http.createServer` with **zero
-dependencies** — Node built-ins only. There is no `package.json`.
+The service is `server.js`, on raw `http.createServer`, with the contract templates and oracle
+keys in `contracts.js`. **Zero dependencies** — Node built-ins only. There is no `package.json`.
+`contracts/sequentia-address.mjs` is the JavaScript reader of `sequentia-contracts`, copied
+unchanged at the commit `contracts/PIN.json` names; never edit it here, move the pin instead.
 
 Node and consensus conventions live in the
 [`Sequentia`](https://github.com/ConcatenaLabs/Sequentia) repo.
@@ -18,16 +20,20 @@ curl -s http://localhost:3005/health
 curl -s http://localhost:3005/index.minimal.json
 ```
 
-No `npm install`. The only automated test is `node tools/succession-smoke.js`, which covers
-`POST /succeed` end to end on a temporary DB. Verify everything else with those smoke commands,
-and for anything touching the verification path, against a local electrs.
+No `npm install`. The automated tests are `node --test test/*.test.js` (contract templates,
+instances and oracle keys; set `SEQC` to a built `seqc` to include the compiler check) and
+`node tools/succession-smoke.js` (`POST /succeed` end to end on a temporary DB). Verify asset
+changes with those smoke commands, and for anything touching the verification path, against a
+local electrs.
 
 Configuration is environment only: `PORT`, `DB_DIR`, `SEED_FILE`, `SEQ_ELECTRS_URL`,
-`REQUIRE_DOMAIN_PROOF`, `PROOF_FETCH_TIMEOUT`, `ADMIN_TOKEN`. `ADMIN_TOKEN` is never written to
+`REQUIRE_DOMAIN_PROOF`, `PROOF_FETCH_TIMEOUT`, `ADMIN_TOKEN`, `SEQC`, `REQUIRE_COMPILE`,
+`CONTRACTS_CHAIN`. `ADMIN_TOKEN` is never written to
 disk by the code; if it is unset, `POST /admin/seed` returns 403.
 
-Storage is a flat directory of JSON files, one per asset: `<DB_DIR>/<asset_id>.json`. No
-database server.
+Storage is a flat directory of JSON files, one per asset: `<DB_DIR>/<asset_id>.json`, with
+templates, instances and oracle keys in the `contracts/`, `contract-instances/` and `oracles/`
+subdirectories. No database server.
 
 In production this is reached through the explorer, which proxies `/registry` to it.
 
