@@ -249,7 +249,7 @@ function validateOpenAmp(o) {
     if (!Array.isArray(o.policy_endpoints) || !o.policy_endpoints.every(e => typeof e === 'string' && /^https:\/\//.test(e)))
       errs.push('openamp.policy_endpoints: array of https urls');
   }
-  // Enforcement election (opendamp-design.md section 5). Absent means the
+  // Enforcement election (opendamp's DESIGN.md section 5). Absent means the
   // co-signed model; "damp" marks a network-enforced asset and requires the
   // verifier binding fields, which the asset id then commits to.
   if (o.enforcement !== undefined && o.enforcement !== 'cosign' && o.enforcement !== 'damp')
@@ -263,7 +263,7 @@ function validateOpenAmp(o) {
     // should not carry them at all. An earlier draft of the design required
     // them; that cannot work, because pi commits to the asset id and the asset
     // id commits to this contract, so a contract carrying pi would have to
-    // contain a hash of itself. The corrected design (opendamp-design.md
+    // contain a hash of itself. The corrected design (opendamp's DESIGN.md
     // section 5) authenticates the genesis policy by the snapshot's issuer
     // signature and by the verifier output on chain instead. Values are still
     // accepted and shape-checked so any contract already committed with them
