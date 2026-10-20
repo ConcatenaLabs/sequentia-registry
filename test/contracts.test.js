@@ -419,7 +419,8 @@ test('an oracle key record is signed by its key', async t => {
     [{ ...record, feeds: [record.feeds[0], record.feeds[0]] }, /BTC\/USD twice/],
     [{ ...record, endpoints: ['http://oracle.example.com/'] }, /https URL/],
     [{ ...record, price_server: 'https://x' }, /unknown field price_server/],
-    [{ ...record, version: 2 }, /record\.version/],
+    [{ ...record, version: 3 }, /record\.version/],
+    [{ ...record, version: 2 }, /record\.beacon_asset/],
   ]) {
     r = await s.post('/oracles', { record: bad, signature: signed(bad) });
     assert.equal(r.status, 400, JSON.stringify(bad));
@@ -431,6 +432,61 @@ test('an oracle key record is signed by its key', async t => {
   r = await s.post('/admin/oracles', { record: moved, signature: signed(moved) }, true);
   assert.equal(r.status, 200);
   assert.equal(r.body.verified_by, 'operator');
+});
+
+// A version 2 record, signed by sequentia-oracle's signer (its pinned example,
+// tests/test_registry.py there): the canonical JSON and the signature agree
+// across the two languages, and the bond's scripts are derived here.
+test('a version 2 oracle record carries the beacon asset and the bond, derived here', async t => {
+  const s = await start(t);
+  const ex = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'sequentia-oracle', 'registry-record.json'), 'utf8'));
+  const record = ex.signed.record;
+  const hash = taggedHash(ORACLE_RECORD_TAG, Buffer.from(reader.canonicalJson(record), 'utf8'));
+  assert.equal(hash.toString('hex'), ex.record_hash, 'the registry writes the record the signer signed');
+  let r = await s.post('/admin/oracles', ex.signed, true);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  r = await s.get(`/oracles/${record.key}`);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.record.beacon_asset, record.beacon_asset);
+  assert.deepEqual(r.body.record.bond, record.bond);
+  assert.equal(r.body.record.bond.template, PIN.oracle_bond.template_hash);
+  assert.equal((await s.get('/oracles')).body.length, 1);
+
+  // Changed after the signer signed it: another beacon asset, another place
+  // for the bond log, and another bond asset (whose scripts are then not the
+  // record's: refused before the signature is read).
+  for (const [f, code, re] of [
+    [x => { x.beacon_asset = 'ab'.repeat(32); }, 403, /not the key's over the record/],
+    [x => { x.bond.log = 'https://evil.example.net/bond.log'; }, 403, /not the key's over the record/],
+    [x => { x.bond.asset = 'ab'.repeat(32); }, 400, /record\.bond\.bonded: .* is not the script/],
+  ]) {
+    const moved = structuredClone(record); f(moved);
+    r = await s.post('/admin/oracles', { record: moved, signature: ex.signed.signature }, true);
+    assert.equal(r.status, code, JSON.stringify(r.body));
+    assert.match(r.body.error, re);
+  }
+
+  // Signed by the key, and still refused: terms whose scripts are not where
+  // the record points.
+  const signedBy = rec => sign(ex.secret, taggedHash(ORACLE_RECORD_TAG, Buffer.from(reader.canonicalJson(rec), 'utf8'))).sig;
+  const forge = f => { const x = structuredClone(record); f(x); return x; };
+  for (const [bad, re] of [
+    [forge(x => { x.bond.asset = 'ab'.repeat(32); }), /record\.bond\.bonded: .* is not the script sequentia\/oracle-bond derives from this key, asset and notice/],
+    [forge(x => { x.bond.noticed = x.bond.bonded; }), /record\.bond\.noticed: .* is not the script sequentia\/oracle-bond derives/],
+    [forge(x => { x.bond.notice = '00001518'; }), /not a time-based relative lock/],
+    [forge(x => { x.bond.notice_seconds += 512; }), /record\.bond\.notice_seconds/],
+    [forge(x => { x.bond.template = '00'.repeat(32); }), /record\.bond\.template/],
+    [forge(x => { x.bond.log = 'http://oracle.example.com/bond.log'; }), /https URL/],
+    [forge(x => { x.bond.coins = 3; }), /record\.bond: unknown field coins/],
+    [forge(x => { delete x.beacon_asset; }), /record\.beacon_asset/],
+    [forge(x => { x.version = 1; }), /record: unknown field beacon_asset/],
+  ]) {
+    r = await s.post('/admin/oracles', { record: bad, signature: signedBy(bad) }, true);
+    assert.equal(r.status, 400, JSON.stringify(bad.bond));
+    assert.match(r.body.error, re);
+  }
+  // What is listed is still the record the signer signed.
+  assert.deepEqual((await s.get(`/oracles/${record.key}`)).body.record, record);
 });
 
 test('the assets still work beside the contracts', async t => {

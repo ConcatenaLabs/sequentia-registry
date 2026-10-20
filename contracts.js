@@ -46,8 +46,26 @@ const RESERVED_NAMESPACES = new Set(['sequentia']);
 const ORACLE_RECORD_TAG = 'sequentia-registry/oracle-key/v1';
 
 let reader = null;
+// sequentia-contracts' oracle bond template, pinned in contracts/PIN.json: a
+// version 2 oracle record's bond scripts are derived from it here, and the
+// pinned vectors must reproduce before anything is listed.
+const BOND_DIR = path.join(__dirname, 'contracts', 'oracle_bond');
+let bondDescriptor = null;
 const readerReady = import(pathToFileURL(path.join(__dirname, 'contracts', 'sequentia-address.mjs')).href)
-  .then(m => { reader = m; });
+  .then(m => {
+    reader = m;
+    for (const [name, f] of Object.entries(PIN.oracle_bond.files)) {
+      const got = crypto.createHash('sha256').update(fs.readFileSync(path.join(__dirname, 'contracts', name))).digest('hex');
+      if (got !== f.sha256) throw new Error(`contracts/${name} is not the pinned copy (sha256 ${got})`);
+    }
+    const d = reader.parseDescriptor(fs.readFileSync(path.join(BOND_DIR, 'descriptor.json'), 'utf8'));
+    if (d.template_hash !== PIN.oracle_bond.template_hash) throw new Error('contracts/oracle_bond is not the pinned template');
+    for (const c of reader.parseJson(fs.readFileSync(path.join(BOND_DIR, 'vectors.json'), 'utf8')).addresses) {
+      if (reader.derive(d, c.params, c.slots || {}).script_pubkey !== c.script_pubkey)
+        throw new Error(`the reader does not derive the bond vector ${c.name}`);
+    }
+    bondDescriptor = d;
+  });
 
 function init(deps) {
   const {
@@ -348,10 +366,11 @@ function init(deps) {
   // ---------- oracle keys ----------
 
   function checkOracleRecord(r) {
-    const fields = ['version', 'key', 'feeds', 'operator', 'endpoints', 'attestation_tag', 'bond', 'revoked'];
     if (!r || typeof r !== 'object' || Array.isArray(r)) throw bad('record: an object');
+    if (r.version !== 1 && r.version !== 2) throw bad('record.version: 1, or 2 with the beacon asset and the bond');
+    const fields = ['version', 'key', 'feeds', 'operator', 'endpoints', 'attestation_tag', 'bond', 'revoked']
+      .concat(r.version === 2 ? ['beacon_asset'] : []);
     for (const k of Object.keys(r)) if (!fields.includes(k)) throw bad(`record: unknown field ${k}`);
-    if (r.version !== 1) throw bad('record.version: 1');
     if (!HEX64.test(r.key || '')) throw bad('record.key: a 32-byte x-only key, lowercase hex');
     if (!liftX(BigInt('0x' + r.key))) throw bad('record.key: not the x coordinate of a curve point');
     if (!Array.isArray(r.feeds) || r.feeds.length < 1 || r.feeds.length > 50) throw bad('record.feeds: 1 to 50 feeds');
@@ -373,8 +392,40 @@ function init(deps) {
     if (!Array.isArray(r.endpoints) || r.endpoints.length < 1 || r.endpoints.length > 5) throw bad('record.endpoints: 1 to 5 https URLs where every attestation is published');
     r.endpoints.forEach((u, i) => httpsUrl(u, `record.endpoints[${i}]`));
     strField(r.attestation_tag, 'record.attestation_tag', 64);
-    if (r.bond !== undefined) strField(r.bond, 'record.bond', 300);
+    if (r.version === 1) {
+      if (r.bond !== undefined) strField(r.bond, 'record.bond', 300);
+    } else {
+      if (!HEX64.test(r.beacon_asset || '')) throw bad('record.beacon_asset: the beacon asset as the node prints it, 64 lowercase hex digits');
+      if (r.bond !== undefined) checkBond(r.key, r.bond);
+    }
     if (r.revoked !== undefined && typeof r.revoked !== 'boolean') throw bad('record.revoked: a boolean');
+  }
+
+  // A version 2 record's bond: sequentia-contracts' templates/oracle_bond for
+  // this key, its asset and its notice, with both of its scripts. The scripts
+  // are derived here from the terms, so a record cannot name terms and point
+  // at coins somewhere else; the key's signature then binds the terms.
+  const TIME_FLAG = 1 << 22;
+  function checkBond(key, b) {
+    const fields = ['template', 'asset', 'notice', 'notice_seconds', 'bonded', 'noticed', 'log'];
+    if (!b || typeof b !== 'object' || Array.isArray(b)) throw bad('record.bond: { template, asset, notice, notice_seconds, bonded, noticed, log? }');
+    for (const k of Object.keys(b)) if (!fields.includes(k)) throw bad(`record.bond: unknown field ${k}`);
+    if (b.template !== PIN.oracle_bond.template_hash)
+      throw bad(`record.bond.template: ${PIN.oracle_bond.template_hash}, sequentia/oracle-bond (the only bond template this registry reads)`);
+    if (!HEX64.test(b.asset || '')) throw bad('record.bond.asset: the bond\'s asset as the node prints it, 64 lowercase hex digits');
+    if (typeof b.notice !== 'string' || !/^[0-9a-f]{8}$/.test(b.notice)) throw bad('record.bond.notice: NOTICE, a BIP68 sequence, 8 lowercase hex digits');
+    const n = parseInt(b.notice, 16);
+    if ((n & ~(TIME_FLAG | 0xffff)) !== 0 || !(n & TIME_FLAG) || !(n & 0xffff))
+      throw bad(`record.bond.notice: ${b.notice} is not a time-based relative lock (bit 22 and a count of 512-second units); a notice in blocks could never be withdrawn`);
+    if (b.notice_seconds !== (n & 0xffff) * 512)
+      throw bad(`record.bond.notice_seconds: ${(n & 0xffff) * 512}, the notice ${b.notice} in seconds`);
+    const params = { ORACLE: key, BOND_ASSET: Buffer.from(b.asset, 'hex').reverse().toString('hex'), NOTICE: b.notice };
+    for (const [field, state] of [['bonded', '00'], ['noticed', '01']]) {
+      const want = reader.derive(bondDescriptor, params, { STATE: state }).script_pubkey;
+      if (b[field] !== want)
+        throw bad(`record.bond.${field}: ${b[field]} is not the script sequentia/oracle-bond derives from this key, asset and notice (${want})`);
+    }
+    if (b.log !== undefined) httpsUrl(b.log, 'record.bond.log');
   }
 
   // What the key signs: a BIP340 tagged hash of the record's canonical JSON.

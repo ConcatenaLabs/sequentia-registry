@@ -10,6 +10,9 @@ keys in `contracts.js`, Arca operator records in `operators.js` and the Arca lea
 the commit `arca/PIN.json` names; never edit it here either. **Zero dependencies** — Node built-ins only. There is no `package.json`.
 `contracts/sequentia-address.mjs` is the JavaScript reader of `sequentia-contracts`, copied
 unchanged at the commit `contracts/PIN.json` names; never edit it here, move the pin instead.
+`contracts/oracle_bond/` is that repository's oracle bond template (descriptor and vectors),
+pinned in the same file under `oracle_bond`; the registry derives a version 2 oracle record's
+bond scripts from it and will not start if its vectors do not reproduce.
 
 Node and consensus conventions live in the
 [`Sequentia`](https://github.com/ConcatenaLabs/Sequentia) repo.
