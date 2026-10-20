@@ -1,0 +1,38 @@
+{
+ "_note": "A public test key, never used for anything but this example. The record is signed with BIP340 (aux all zero) over tagged('sequentia-registry/oracle-key/v1', canonical JSON).",
+ "record_hash": "d0c59b57051f055caafb5de4fc2afab4da74409199aa3db31f849174ee244ec0",
+ "secret": "4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b",
+ "signed": {
+  "record": {
+   "attestation_tag": "Sequentia/oracle/price",
+   "beacon_asset": "3333333333333333333333333333333333333333333333333333333333333333",
+   "bond": {
+    "asset": "2222222222222222222222222222222222222222222222222222222222222222",
+    "bonded": "512098ec438be0a091f9d68d538cdf6c2f5cc3f33da7bbe595c525fc732898f000a7",
+    "log": "https://oracle.example.com/v2/bond/log",
+    "notice": "004013c7",
+    "notice_seconds": 2592256,
+    "noticed": "512047d62d39732ed61acf1fd0bed05828e2fbc99772268441040fb68ba899b7236d",
+    "template": "36e09201b19cdd4ad589ce35c6f04fc25010c9ccc2a684355d37ee361aed9b96"
+   },
+   "endpoints": [
+    "https://oracle.example.com/v2/log/raw"
+   ],
+   "feeds": [
+    {
+     "decimals": 5,
+     "description": "Gold in USDX",
+     "id": "GOLD/USDX"
+    }
+   ],
+   "key": "d32b8a8af7e376739f1675707c8b57c6ad9f010c5ba82c60d973bf7a42be577c",
+   "operator": {
+    "domain": "oracle.example.com",
+    "name": "Example oracle"
+   },
+   "revoked": false,
+   "version": 2
+  },
+  "signature": "b42c2d14687b05d50f11a0618dfde22862552637be4dc72042a78f5d54eb7f16ac4f8f82f5a321b01e44a2c71574b3779bed985f8d60b09bf3195c1526fce383"
+ }
+}

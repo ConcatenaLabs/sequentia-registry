@@ -3,5 +3,13 @@
   "commit": "11a719c590435dbb684e9205bb3db9a6db13098c",
   "reader": { "path": "mirrors/js/sequentia-address.mjs", "sha256": "74fca7b895f701c41628bebddb82777635b5b4093e23d64c4e8e5dfae1361981" },
   "compiler": { "name": "simplicityhl", "version": "0.7.2" },
-  "budget": { "per_witness_byte": 4, "offset": 50, "max": 4000050 }
+  "budget": { "per_witness_byte": 4, "offset": 50, "max": 4000050 },
+  "oracle_bond": {
+    "commit": "f785065e4b224b7d69af9a1e0d0a8fd3dfcaafd8",
+    "files": {
+      "oracle_bond/descriptor.json": { "from": "templates/oracle_bond/descriptor.json", "sha256": "26e55e402c2586f234452f617bed589421e4849962a5888737e9c06c6cb44695" },
+      "oracle_bond/vectors.json": { "from": "templates/oracle_bond/vectors.json", "sha256": "9b110c394b920c54a382d0718651a80306bd8b07f8d5bb6953dc92d7599643b9" }
+    },
+    "template_hash": "36e09201b19cdd4ad589ce35c6f04fc25010c9ccc2a684355d37ee361aed9b96"
+  }
 }

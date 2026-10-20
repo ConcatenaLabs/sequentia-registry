@@ -385,25 +385,48 @@ reveals it. One root can sit in several templates, so each maps to a list.
 ## Oracle keys
 
 An oracle key record says which price feeds a BIP340 key signs, who runs the
-signer, and where every attestation is published:
+signer, where every attestation is published and, in version 2, the beacon
+asset its contracts pin and the bond it stands behind its prices with:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "key": "<32-byte x-only key>",
-  "feeds": [{ "id": "BTC/USD", "description": "Bitcoin in US dollars", "decimals": 8 }],
+  "feeds": [{ "id": "GOLD/USDX", "description": "Gold in USDX", "decimals": 5 }],
   "operator": { "name": "Example oracle", "domain": "oracle.example.com" },
-  "endpoints": ["https://oracle.example.com/attestations"],
-  "attestation_tag": "<the tag of the tagged hash the signer signs>",
-  "bond": "<optional: the bond that two conflicting attestations forfeit>",
+  "endpoints": ["https://oracle.example.com/v2/log/raw"],
+  "attestation_tag": "Sequentia/oracle/price",
+  "beacon_asset": "<the beacon asset, as the node prints it>",
+  "bond": {
+    "template": "<sequentia/oracle-bond's template hash>",
+    "asset": "<the asset the bond is held in, as the node prints it>",
+    "notice": "<NOTICE: a BIP68 time-based sequence, 8 hex digits>",
+    "notice_seconds": 2592000,
+    "bonded": "<the bond's script while bonded>",
+    "noticed": "<its script once notice is given>",
+    "log": "<optional: the https URL of the oracle's bond log>"
+  },
   "revoked": false
 }
 ```
 
+The bond is sequentia-contracts' `templates/oracle_bond`, pinned in
+`contracts/oracle_bond/` (`contracts/PIN.json`), and the only bond template
+the registry reads. It derives `bonded` and `noticed` again from the key, the
+asset and the notice, and refuses a record whose scripts are not those, a
+notice in blocks (such a bond could never be withdrawn), or a
+`notice_seconds` that is not the notice. Anyone counting the coins at those
+two scripts on a node sees what the key has bonded; a conflict between two of
+its attestations slashes them. A version 1 record has no `beacon_asset`, and
+its `bond`, when present, is a line of text.
+
 `POST /oracles` takes `{ record, signature }`. The signature is the key's, BIP340,
 over the tagged hash (tag `sequentia-registry/oracle-key/v1`) of the record's
 canonical JSON, so no one can file a record for a key they do not hold, nor
-change a record after its key signed it. The operator's domain serves, at
+change a record after its key signed it. sequentia-oracle's signer signs a
+version 2 record with `--sign-registry-record`, only for its own key and its
+own bond as its bond log declares it; `test/fixtures/sequentia-oracle/` is a
+record that signer signed, which the tests post. The operator's domain serves, at
 `https://<domain>/.well-known/sequentia-oracle-proof-<key>`, exactly
 `Authorize linking the domain name <domain> to the Sequentia oracle key <key>`.
 A key's record is replaced by a newer one it signs, from the same domain; a
