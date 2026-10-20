@@ -8,15 +8,18 @@ Every Sequentia surface (the node, the node GUI, the block explorer, the web
 wallet) fetches asset labels from here, so there is a single source of truth
 instead of hand-maintained lists.
 
-Beside the assets it keeps two more collections: **contract templates**
+Beside the assets it keeps more collections: **contract templates**
 (Simplicity and tapscript contracts, each verified on write against its
 descriptor, sources, golden vectors and pinned compiler, with the instances the
-chain has paid) and **oracle keys** (the price feeds a BIP340 key signs and where
-its attestations are published). See "Contract templates" and "Oracle keys"
-below.
+chain has paid), **oracle keys** (the price feeds a BIP340 key signs and where
+its attestations are published), **Arca operators** (each operator's signed
+record, checked against its live `info`, which wallets read to find an
+operator) and the **Arca leaf templates** (every leaf template an operator
+co-signs, with the script hashes of its golden vectors). See the sections of
+those names below.
 
-The service is `server.js` with the collections in `contracts.js`, and has zero
-npm dependencies:
+The service is `server.js` with the collections in `contracts.js`,
+`operators.js` and `templates.js`, and has zero npm dependencies:
 
 ```
 node server.js
@@ -421,6 +424,119 @@ records with `ADMIN_TOKEN` and no domain proof, never without the key's signatur
 | POST | `/oracles` | File a record: the key's signature and the domain proof |
 | POST | `/admin/oracles` | (bearer `ADMIN_TOKEN`) the key's signature, filed by the operator |
 
+## Arca operators
+
+An Arca operator lists itself here so that wallets can find it. Its record
+says what its own `GET /v1/info` says, in the operator's own settings, signed
+by its operator key:
+
+```json
+{
+  "arca_operator": 1,
+  "operator": "<the operator key S, 32-byte x-only, hex>",
+  "genesis_hash": "<the chain's genesis hash, display order>",
+  "api": "https://example.org/arca",
+  "assets": [{
+    "asset": "<asset id>",
+    "min_leaf": "1000",
+    "rate": { "source": "node", "max_age_seconds": 600 },
+    "fees": { "refresh_ppm": 5000, "refresh_base": "200", "offboard_ppm": 1000, "offboard_base_value": "100",
+              "lightning_ppm": 0, "lightning_base": "0" }
+  }],
+  "keepers": { "keys": [], "required": 0 },
+  "exit_delay_units": { "min": 253, "max": 338 },
+  "expiry": { "batch_lifetime_seconds": 2419200, "exit_deadline_seconds": 259200 },
+  "templates": { "version": 1, "list": ["vtxo-1", "board-1", "htlc-1"] },
+  "contact": { "name": "Example", "domain": "example.org", "email": "ops@example.org" },
+  "issued_at": 1800000000
+}
+```
+
+- `api` is the base URL wallets are given (`arca create --server`); the
+  registry reads the operator's info at `<api>/v1/info`.
+- `assets` are in the order of their ids. A smallest leaf or a fixed fee part
+  the operator sets as a value in the reference unit is recorded as that value
+  (`min_leaf_value`, `*_base_value`), and otherwise in atoms; a rate is recorded
+  by its source and how long it is good for. The atoms a value comes to and the
+  rate itself move with prices, so they are not part of the record: the
+  registry shows each asset's rate as the operator reads it now beside the
+  record (`live.rates`).
+- `keepers.keys` are sorted; `expiry` is a batch's lifetime and its exit
+  deadline (`info.boards`); `templates` is `info.templates`, and the registry
+  names any it does not list among the Arca leaf templates
+  (`live.unknown_templates`).
+- `issued_at` is when the record was made, unix seconds.
+
+`POST /operators` takes `{ record, signature }`. The signature is the operator
+key's, BIP340, over the tagged hash (tag `sequentia-registry/arca-operator/v1`)
+of the record's canonical JSON: keys sorted, no white space, strings of
+printable ASCII, whole numbers from 0 to 2^53 - 1, no `null`. Those are the
+bytes Arca's `arca_covenant::operator_record` writes, so the operator's signer
+signs them (`arca-signer --sign-operator-record`) and wallets check them
+(`arca operators`, `arca join --from-registry`) without trusting the registry.
+
+A record is listed only when its signature verifies and the operator's info,
+read when it is posted, says what it says; otherwise it is refused with each
+difference. A key's newer record (a later `issued_at`) replaces its older one;
+an older one, or another record with the same `issued_at`, is refused, so a
+record cannot be played back over the one that replaced it. With
+`REQUIRE_DOMAIN_PROOF`, the contact's domain serves, at
+`https://<domain>/.well-known/sequentia-operator-proof-<key>`, exactly
+`Authorize linking the domain name <domain> to the Arca operator key <key>`,
+and another domain cannot take a listed key over. The registry operator files
+records with `ADMIN_TOKEN` and no domain proof, never without the key's
+signature.
+
+Each listed record is checked against its operator's info again every
+`OPERATOR_CHECK_MS`, and its entry says how it stands: `status` is `ok` while
+the info says what the record says; `mismatched`, with `differences` (each
+`{ field, record, info }`), once it says something else, so an operator that
+changes what it serves, charges or names signs a new record; and `stale` once
+the operator has not answered for `OPERATOR_STALE_AFTER_MS`, with the error in
+`last_error`. A record that matches again is `ok` again.
+
+The record is written from the operator's own info by
+`tools/operator-record.js`, then signed on the machine that holds the key:
+
+```
+node tools/operator-record.js --info http://127.0.0.1:3535 --api https://example.org/arca \
+  --contact-name "Example" --contact-domain example.org > record.json
+arca-signer --key-file <key file> --genesis <genesis hash> --sign-operator-record record.json > signed.json
+curl -s -X POST -H 'content-type: application/json' --data @signed.json https://<registry>/operators
+```
+
+An operator's API is read through the SSRF guard and must be `https://`;
+`OPERATORS_LOCAL=1` takes plain `http://` and private addresses, for a
+registry and operators on one machine, as on a local chain.
+
+## Arca leaf templates
+
+`GET /templates` lists every leaf template an Arca operator co-signs
+(`vtxo-1`, `board-1`, `htlc-1`, …) with the list's version, and for each its
+golden vectors: the output the template builds from fixed test parameters,
+which every implementation reproduces byte for byte. Each vector shows its
+`script_pubkey`, its `script_hash` (SHA-256 of the script, as electrs keys
+scripts), the taproot root and each leaf's hash and size.
+
+The vectors are those of the
+[arca](https://github.com/ConcatenaLabs/arca) repository
+(`regtest/vectors/arca.json`), copied unchanged into `arca/vectors.json` at the
+commit `arca/PIN.json` names, with the file's SHA-256 and which vectors belong
+to which template. At start the registry checks the copy's hash and rebuilds
+every vector's output from its leaves (each leaf's hash from its script,
+`TapLeaf/elements` at leaf version `0xc4`; the root from its control block,
+`TapBranch/elements`; the output key from the internal key tweaked by the
+root, `TapTweak/elements`); a copy that fails any check stops the registry.
+To move the pin, copy the file from the new commit and update `arca/PIN.json`.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/operators`, `/operators/<key>` | Arca operator records, each with its signature, `status`, `checked_at`, `differences` and `live` |
+| POST | `/operators` | File a record: the key's signature, the operator's info and the domain proof |
+| POST | `/admin/operators` | (bearer `ADMIN_TOKEN`) the key's signature and the operator's info, filed by the registry operator |
+| POST | `/admin/operators/<key>/check` | (bearer `ADMIN_TOKEN`) check a record against its operator's info now |
+| GET | `/templates` | The Arca leaf template list |
+
 ## Consumers
 
 - **Sequentia node**: start `sequentiad` with `-assetregistryurl=<index url>`;
@@ -438,6 +554,9 @@ records with `ADMIN_TOKEN` and no domain proof, never without the key's signatur
   the template a Simplicity spend runs.
 - **Web wallet**: fetches `/registry/index.minimal.json` (override with
   `window.SEQ_REGISTRY_URL`).
+- **Arca wallets**: `arca operators` lists `/operators`, checking every
+  signature, and `arca join --from-registry <key>` joins one (the `arca`
+  library's `bark::arca::registry`).
 - **OpenAMP wallets**: discover restricted assets here, then verify the
   asset-to-policy binding against the policy server listed in the contract's
   `openamp.policy_endpoints`.
@@ -515,6 +634,10 @@ chain check still runs). To bypass both checks for a hand-approved entry, set
 | `SEQC` | `seqc` | the pinned compiler's `seqc` binary, from `sequentia-contracts` at the commit in `contracts/PIN.json` |
 | `REQUIRE_COMPILE` | `1` | compile every template with `SEQC` before storing it (`0` stores it unverified, testing only) |
 | `CONTRACTS_CHAIN` | `sequentia-testnet` | the chain name, in a descriptor's `chains`, that instances are registered on |
+| `OPERATOR_CHECK_MS` | `600000` | how often every Arca operator record is checked against its operator's info (`0`: never) |
+| `OPERATOR_STALE_AFTER_MS` | `3600000` | how long an operator may not answer before its record is `stale` |
+| `OPERATOR_FETCH_TIMEOUT` | `8000` | ms timeout for reading an operator's info |
+| `OPERATORS_LOCAL` | (unset) | `1` takes `http://` and private addresses for an operator's API (one machine only, testing) |
 
 `seqc` is built from `sequentia-contracts`, at the commit `contracts/PIN.json`
 names:
@@ -532,7 +655,8 @@ The store is a flat directory of JSON files, one per asset:
 Templates, instances and oracle keys sit beside them in
 `<DB_DIR>/contracts/<template_hash>.json`,
 `<DB_DIR>/contract-instances/<scriptPubKey>.json` and
-`<DB_DIR>/oracles/<key>.json`.
+`<DB_DIR>/oracles/<key>.json`, with Arca operator records in
+`<DB_DIR>/operators/<key>.json`.
 There is no database server; back up or migrate the registry by copying the
 directory.
 
@@ -551,6 +675,14 @@ Repo layout:
   copy the reader from the new commit and update `PIN.json` and the fixtures.
 - `test/contracts.test.js`, with `test/fixtures/sequentia-contracts/`: the
   reader corpus and the templates it reads, copied from that commit.
+- `operators.js`: Arca operator records, their canonical form, their checks
+  against an operator's info and the schedule that repeats them.
+- `templates.js` and `arca/`: the Arca leaf template list, rebuilt from the
+  golden vectors copied unchanged from the arca repository
+  (`arca/vectors.json`) at the commit `arca/PIN.json` names.
+- `test/operators.test.js`, with `test/fixtures/arca/`: operator records
+  against a stand-in operator, and a record signed by `arca-signer`.
+- `tools/operator-record.js`: writes an operator's unsigned record from its info.
 - `seed/legacy-assets.json`: pre-approved entries loaded on first run.
 - `tools/sign-succession.js`: signs a succession with the current issuer key.
 - `tools/succession-smoke.js`: self-contained end-to-end test of succession
@@ -561,7 +693,7 @@ Repo layout:
 The tests:
 
 ```
-node --test test/*.test.js                              # contracts and oracle keys
+node --test test/*.test.js                              # contracts, oracle keys, Arca operators and templates
 SEQC=/path/to/seqc node --test test/*.test.js           # and the pinned compiler's check
 node tools/succession-smoke.js                          # succession
 ```

@@ -796,6 +796,14 @@ const contracts = require('./contracts').init({
   DB_DIR, ELECTRS, REQUIRE_DOMAIN_PROOF, DOMAIN_RE, fetchUrl, verifyProofLine, httpErr, canonicalize,
 });
 const isAdmin = req => !!ADMIN_TOKEN && req.headers.authorization === `Bearer ${ADMIN_TOKEN}`;
+// The Arca leaf template list (templates.js), rebuilt from the pinned vectors
+// at start; a copy that does not rebuild stops the registry.
+const arcaTemplates = require('./templates').load();
+// Arca operator records (operators.js).
+const operators = require('./operators').init({
+  DB_DIR, REQUIRE_DOMAIN_PROOF, DOMAIN_RE, fetchUrl, verifyProofLine, httpErr,
+  templateNames: () => arcaTemplates.templates.map(t => t.name),
+});
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -809,6 +817,13 @@ const server = http.createServer(async (req, res) => {
         const text = await readBody(req, 1024 * 1024);
         try { return JSON.parse(text || '{}'); } catch (e) { throw httpErr(400, 'the body is not JSON'); }
       }, () => isAdmin(req))) return;
+
+    if (await operators.route(req, p, (status, obj) => send(res, status, obj),
+      async () => {
+        const text = await readBody(req, 64 * 1024);
+        try { return JSON.parse(text || '{}'); } catch (e) { throw httpErr(400, 'the body is not JSON'); }
+      }, () => isAdmin(req))) return;
+    if (req.method === 'GET' && p === '/templates') return send(res, 200, arcaTemplates);
 
     if (req.method === 'GET' && p === '/') return send(res, 200, allEntries());
     if (req.method === 'GET' && p === '/index.json') return send(res, 200, fullIndex());

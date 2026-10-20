@@ -5,7 +5,9 @@ asset id to issuer-published metadata and, where possible, proves that metadata 
 metadata the asset was issued under.
 
 The service is `server.js`, on raw `http.createServer`, with the contract templates and oracle
-keys in `contracts.js`. **Zero dependencies** — Node built-ins only. There is no `package.json`.
+keys in `contracts.js`, Arca operator records in `operators.js` and the Arca leaf template list in
+`templates.js`. `arca/vectors.json` is the arca repository's golden vectors, copied unchanged at
+the commit `arca/PIN.json` names; never edit it here either. **Zero dependencies** — Node built-ins only. There is no `package.json`.
 `contracts/sequentia-address.mjs` is the JavaScript reader of `sequentia-contracts`, copied
 unchanged at the commit `contracts/PIN.json` names; never edit it here, move the pin instead.
 
@@ -28,12 +30,15 @@ local electrs.
 
 Configuration is environment only: `PORT`, `DB_DIR`, `SEED_FILE`, `SEQ_ELECTRS_URL`,
 `REQUIRE_DOMAIN_PROOF`, `PROOF_FETCH_TIMEOUT`, `ADMIN_TOKEN`, `SEQC`, `REQUIRE_COMPILE`,
-`CONTRACTS_CHAIN`. `ADMIN_TOKEN` is never written to
+`CONTRACTS_CHAIN`, `OPERATOR_CHECK_MS`, `OPERATOR_STALE_AFTER_MS`, `OPERATOR_FETCH_TIMEOUT`,
+`OPERATORS_LOCAL`. An operator record's canonical form must stay byte-identical to
+`arca_covenant::operator_record` in arca: `test/operators.test.js` checks a record that crate's
+signer signed. `ADMIN_TOKEN` is never written to
 disk by the code; if it is unset, `POST /admin/seed` returns 403.
 
 Storage is a flat directory of JSON files, one per asset: `<DB_DIR>/<asset_id>.json`, with
-templates, instances and oracle keys in the `contracts/`, `contract-instances/` and `oracles/`
-subdirectories. No database server.
+templates, instances, oracle keys and Arca operators in the `contracts/`, `contract-instances/`,
+`oracles/` and `operators/` subdirectories. No database server.
 
 In production this is reached through the explorer, which proxies `/registry` to it.
 

@@ -510,4 +510,4 @@ function schnorrVerify(pub, msg, sig) {
   return R !== null && R[1] % 2n === 0n && R[0] === r;
 }
 
-module.exports = { init, schnorrVerify, taggedHash, liftX, mul, G, N, bytes32, int, ORACLE_RECORD_TAG, PIN };
+module.exports = { init, schnorrVerify, taggedHash, liftX, mul, add, G, N, P, bytes32, int, ORACLE_RECORD_TAG, PIN };

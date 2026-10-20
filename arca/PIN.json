@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/ConcatenaLabs/arca",
+  "commit": "83e26e610fee65b805c4e02796bd01d97ded1005",
+  "file": "regtest/vectors/arca.json",
+  "sha256": "3b3d2d6b5390df4d7adbe05ccaa143a0668aaba6fac270d9fef2b96658475492",
+  "list_version": 1,
+  "templates": [
+    { "name": "vtxo-1", "use": "An ordinary holding: the rebindable collaborative path and the owner's exit after the exit delay", "vectors": ["leaf"] },
+    { "name": "board-1", "use": "A board: the owner's coins on-chain, taken cooperatively as they are or converted by the owner alone into a vtxo-1 leaf", "vectors": ["board"] },
+    { "name": "htlc-1", "use": "A Lightning or cross-chain leg: a claim with the preimage and a refund after the timeout in place of the exit, one vector per direction", "vectors": ["htlc", "htlc_receive"] }
+  ]
+}
