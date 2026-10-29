@@ -468,7 +468,8 @@ by its operator key:
   }],
   "keepers": { "keys": [], "required": 0 },
   "exit_delay_units": { "min": 253, "max": 338 },
-  "expiry": { "batch_lifetime_seconds": 2419200, "exit_deadline_seconds": 259200 },
+  "expiry": { "batch_lifetime_seconds": 2419200, "exit_deadline_seconds": 259200,
+              "swept": { "policy": "repaid", "late_fee": "refresh" } },
   "templates": { "version": 1, "list": ["vtxo-1", "board-1", "htlc-1"] },
   "contact": { "name": "Example", "domain": "example.org", "email": "ops@example.org" },
   "issued_at": 1800000000
@@ -485,7 +486,11 @@ by its operator key:
   registry shows each asset's rate as the operator reads it now beside the
   record (`live.rates`).
 - `keepers.keys` are sorted; `expiry` is a batch's lifetime and its exit
-  deadline (`info.boards`); `templates` is `info.templates`, and the registry
+  deadline (`info.boards`) and, when the operator's info states it, what it
+  does with a coin its sweep takes from a holder who stayed away past the
+  expiry (`swept`, `info.swept`): `repaid`, the coin owed back and paid as a
+  new leaf, less `late_fee`, `refresh` (the asset's refresh fee at its full
+  charge); `templates` is `info.templates`, and the registry
   names any it does not list among the Arca leaf templates
   (`live.unknown_templates`).
 - `issued_at` is when the record was made, unix seconds.

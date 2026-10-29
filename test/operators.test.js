@@ -187,6 +187,26 @@ test('a record is listed only when signed by its key and true to the operator\'s
   assert.match(r.body.error, /is listed by example.org/);
 });
 
+test('an operator that repays swept coins says so in its record, and a record cannot claim it for an operator that does not', async t => {
+  const op = await fakeOperator(t);
+  const s = await start(t);
+  op.info.swept = { policy: 'repaid', late_fee: 'refresh' };
+  const record = ops.recordFromInfo(op.info, { api: op.url, contact, issued_at: Math.floor(Date.now() / 1000) });
+  assert.deepEqual(record.expiry.swept, { policy: 'repaid', late_fee: 'refresh' });
+  assert.equal((await s.post('/operators', signed(record))).status, 200);
+  // An info that states no such policy differs from the record.
+  delete op.info.swept;
+  const e = (await s.post(`/admin/operators/${KEY}/check`, {}, true)).body;
+  assert.equal(e.status, 'mismatched');
+  assert.deepEqual(e.differences.map(d => d.field), ['expiry']);
+  // A policy the registry does not know is refused.
+  const odd = ops.recordFromInfo({ ...info(), swept: { policy: 'kept', late_fee: 'refresh' } },
+    { api: op.url, contact, issued_at: Math.floor(Date.now() / 1000) + 1 });
+  const r = await s.post('/operators', signed(odd));
+  assert.equal(r.status, 400);
+  assert.match(JSON.stringify(r.body), /record.expiry.swept.policy: repaid/);
+});
+
 test('a listed record is marked mismatched, stale and ok again as its operator changes', async t => {
   const op = await fakeOperator(t);
   const s = await start(t, { OPERATOR_STALE_AFTER_MS: '300' });

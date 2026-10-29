@@ -5,7 +5,8 @@
  * An Arca operator lists itself here so that wallets can find it: a record of
  * its operator key, the chain's genesis, its API's address, the assets it
  * serves with their rate sources and fee schedules, its keepers, its exit
- * delays and expiry, the leaf templates it co-signs, and a contact, signed by
+ * delays and expiry (with what it does with a coin its sweep takes from its
+ * holder), the leaf templates it co-signs, and a contact, signed by
  * the operator key. The record says what the operator's own GET /v1/info
  * says, in the operator's own settings: a part it sets as a value in the
  * reference unit is recorded as that value, not as the atoms it comes to at
@@ -39,6 +40,11 @@ const DEC = /^(0|[1-9][0-9]{0,17})$/;
 const FIELDS = ['api', 'arca_operator', 'assets', 'contact', 'exit_delay_units', 'expiry', 'genesis_hash', 'issued_at', 'keepers', 'operator', 'templates'];
 const RATE_SOURCES = ['node', 'file', 'command'];
 const FEE_PARTS = ['refresh', 'offboard', 'lightning'];
+// What an operator does with a coin its sweep takes from its holder
+// (`info.swept`): `repaid`, less `late_fee`, `refresh` (the asset's refresh
+// fee at its full charge).
+const SWEPT_POLICIES = ['repaid'];
+const LATE_FEES = ['refresh'];
 
 // The canonical form: the bytes the operator key signs.
 function canonical(v, at = 'record') {
@@ -91,7 +97,8 @@ function recordFromInfo(info, { api, contact, issued_at }) {
     assets,
     keepers: { keys: [...((info.keepers && info.keepers.keys) || [])].sort(), required: (info.keepers && info.keepers.required) || 0 },
     exit_delay_units: { min: info.exit_delay_units.min, max: info.exit_delay_units.max },
-    expiry: { batch_lifetime_seconds: info.boards.lifetime_seconds, exit_deadline_seconds: info.boards.exit_deadline_seconds },
+    expiry: Object.assign({ batch_lifetime_seconds: info.boards.lifetime_seconds, exit_deadline_seconds: info.boards.exit_deadline_seconds },
+      info.swept ? { swept: { policy: info.swept.policy, late_fee: info.swept.late_fee } } : {}),
     templates: { version: info.templates.version, list: [...info.templates.list] },
     contact,
     issued_at,
@@ -192,8 +199,13 @@ function init(deps) {
     only(r.exit_delay_units, 'record.exit_delay_units', ['min', 'max']);
     int(r.exit_delay_units.min, 'record.exit_delay_units.min'); int(r.exit_delay_units.max, 'record.exit_delay_units.max');
     if (r.exit_delay_units.min > r.exit_delay_units.max) throw bad('record.exit_delay_units: min above max');
-    only(r.expiry, 'record.expiry', ['batch_lifetime_seconds', 'exit_deadline_seconds']);
+    only(r.expiry, 'record.expiry', ['batch_lifetime_seconds', 'exit_deadline_seconds', 'swept'], ['batch_lifetime_seconds', 'exit_deadline_seconds']);
     int(r.expiry.batch_lifetime_seconds, 'record.expiry.batch_lifetime_seconds'); int(r.expiry.exit_deadline_seconds, 'record.expiry.exit_deadline_seconds');
+    if (r.expiry.swept !== undefined) {
+      only(r.expiry.swept, 'record.expiry.swept', ['policy', 'late_fee']);
+      if (!SWEPT_POLICIES.includes(r.expiry.swept.policy)) throw bad(`record.expiry.swept.policy: ${SWEPT_POLICIES.join(', ')}`);
+      if (!LATE_FEES.includes(r.expiry.swept.late_fee)) throw bad(`record.expiry.swept.late_fee: ${LATE_FEES.join(', ')}`);
+    }
     only(r.templates, 'record.templates', ['version', 'list']);
     int(r.templates.version, 'record.templates.version');
     if (!Array.isArray(r.templates.list) || r.templates.list.length < 1 || r.templates.list.length > 32) throw bad('record.templates.list: 1 to 32 template names');
