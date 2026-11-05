@@ -1,0 +1,24 @@
+# The tests on every pull request and on main, on Node 18, the Node the testnet server runs the
+# registry on. The service has no dependencies to install.
+#
+# Not run here, by design (README, "Development"):
+# - SKIPPED (needs the pinned Simplicity compiler): the compiler check, which wants SEQC.
+name: tests
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  node-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - run: node --test test/*.test.js
+      - name: succession smoke (POST /succeed end to end on a temporary database)
+        run: node tools/succession-smoke.js
