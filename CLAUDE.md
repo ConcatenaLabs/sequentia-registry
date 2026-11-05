@@ -27,7 +27,8 @@ curl -s http://localhost:3005/index.minimal.json
 
 No `npm install`. The automated tests are `node --test test/*.test.js` (contract templates,
 instances and oracle keys; set `SEQC` to a built `seqc` to include the compiler check) and
-`node tools/succession-smoke.js` (`POST /succeed` end to end on a temporary DB). Verify asset
+`node tools/succession-smoke.js` (`POST /succeed` end to end on a temporary DB); CI
+(`.github/workflows/tests.yml`) runs both on every pull request and on `main`. Verify asset
 changes with those smoke commands, and for anything touching the verification path, against a
 local electrs.
 
